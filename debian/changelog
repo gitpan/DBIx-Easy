@@ -1,3 +1,16 @@
+dbix-easy-perl (0.07-1) unstable; urgency=low
+
+  * New upstream Version and new maintainer
+  * Closes:Bug#70348
+
+ -- Dennis Schoen <dennis@debian.org>  Fri, 23 Jun 2000 18:29:55 +0200
+
+dbix-easy-perl (0.06-2) unstable; urgency=low
+
+  * Sponsoring upload for Dennis Schoen
+
+ -- Dennis Schoen and Alexander Koch <perl@argh.org>  Mon,  1 Jan 2000 10:04:13 +0100
+
 dbix-easy-perl (0.06-1) unstable; urgency=low
 
   * Initial Release.

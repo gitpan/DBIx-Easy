@@ -1,11 +1,11 @@
 # Easy.pm - Easy to Use DBI interface
 
-# Copyright (C) 1999 Stefan Hornburg, Dennis Schön
+# Copyright (C) 1999,2000 Stefan Hornburg, Dennis Schön
 
-# Authors: Stefan Hornburg <racke@linuxia.net>
+# Authors: Stefan Hornburg <racke@linuxia.de>
 #          Dennis Schön <dschoen@rio.gt.owl.de>
-# Maintainer: Stefan Hornburg <racke@linuxia.net>
-# Version: 0.06
+# Maintainer: Stefan Hornburg <racke@linuxia.de>
+# Version: 0.07
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -34,7 +34,7 @@ require Exporter;
 # Do not simply export all your public functions/methods/constants.
 @EXPORT = qw(
 );
-$VERSION = '0.06';
+$VERSION = '0.07';
 
 use DBI;
 
@@ -52,7 +52,7 @@ DBIx::Easy - Easy to Use DBI interface
                    time => \$dbi_interface -> now);
 
   $dbi_interface -> update ('components', "table='ram'", price => 100);
-  $dbi_interface -> makemap ('components', 'id', 'price');
+  $dbi_interface -> makemap ('components', 'id', 'price', 'price > 10');
   $components = $dbi_interface -> rows ('components');
   $components_needed = $dbi_interface -> rows ('components', 'stock = 0');
 
@@ -66,12 +66,23 @@ Currently only the Pg, mSQL and mysql drivers are supported.
   $dbi_interface = new DBIx::Easy qw(Pg template1);
   $dbi_interface = new DBIx::Easy qw(Pg template1 racke);
   $dbi_interface = new DBIx::Easy qw(Pg template1 racke aF3xD4_i);
-  $dbi_interface = new DBIx::Easy qw(Pg template1 racke@linuxia.net aF3xD4_i);
+  $dbi_interface = new DBIx::Easy qw(Pg template1 racke@linuxia.de aF3xD4_i);
 
 The required parameters are the database driver
 and the database name. Additional parameters are the database user
 and the password to access the database. To specify the database host
 use the USER@HOST notation for the user parameter.
+
+=head1 DESTROYING A DBI INTERFACE OBJECT
+
+It is important that you commit all changes at the end of the interaction
+with the DBMS. You can either explicitly commit 
+
+  $dbi_interface -> commit ();
+
+or do it implicitly:
+
+  undef $dbi_interface;
 
 =head1 ERROR HANDLING
 
@@ -90,7 +101,7 @@ called.
 # Variables
 # =========
 
-my $maintainer_adr = 'racke@linuxia.net';
+my $maintainer_adr = 'racke@linuxia.de';
 
 # Keywords for connect()
 my %kwmap = (mSQL => 'database', mysql => 'database', Pg => 'dbname');
@@ -193,33 +204,28 @@ sub DESTROY {
 # Error handler for this module.
 # ------------------------------
 
-sub fatal
-  {
+sub fatal {
 	my ($self, $info, $err) = @_;
 	my $errstr = '';
 
-	if (defined $self -> {CONN})
-	  {
+	if (defined $self -> {CONN}) {
 		$err = $DBI::err;
 		$errstr = $DBI::errstr;
-		
-		# something has gone wrong, rollback anything
-		$self -> {CONN} -> rollback ();
-	  }
+
+		unless ($self -> {CONN} -> {AutoCommit}) {
+            # something has gone wrong, rollback anything
+            $self -> {CONN} -> rollback ();
+        }
+    }
     
-	if (defined $self -> {'HANDLER'})
-	  {
+	if (defined $self -> {'HANDLER'}) {
 		&{$self -> {'HANDLER'}} ($info, $err, $errstr);
-	  }
-	elsif (defined $self -> {CONN})
-	  {
+    } elsif (defined $self -> {CONN}) {
 		die "$info (DBERR: $err, DBMSG: $errstr)\n";
-	  }
-	else
-	  {
-		die "$info\n";
-	  }
-  }
+    } else {
+		die "$info ($err)\n";
+    }
+}
 
 # ---------------------------------------------------------------
 # METHOD: connect
@@ -269,7 +275,7 @@ sub connect ()
             return;
 		  }
 	  }
-
+    
 	# no need to see SQL errors twice
 	$self -> {CONN} -> {'PrintError'} = 0;
 	$self -> {CONN};
@@ -353,17 +359,25 @@ sub insert ($$$;@)
 	  (&{$obtstatmap{$self -> {'DRIVER'}}} ($table, @columns));
 	$flags = $sthtest -> {'TYPE'};
     $sthtest -> finish ();
-    
+
 	for (my $i = 0; $i <= $#values; $i++) {
         if (ref ($values[$i]) eq 'SCALAR') {
 			$values[$i] = ${$values[$i]};
-        }
-        elsif (defined $values[$i]) {
-			unless ($$flags[$i] == DBI::SQL_INTEGER) {
-                $values[$i] = $self -> quote ($values[$i]);
-            }
-        }
-        else {
+        } elsif ($$flags[$i] == DBI::SQL_INTEGER
+				 || $$flags[$i] == DBI::SQL_SMALLINT
+				 || $$flags[$i] == DBI::SQL_DECIMAL
+				 || $$flags[$i] == DBI::SQL_FLOAT
+				 || $$flags[$i] == DBI::SQL_REAL
+				 || $$flags[$i] == DBI::SQL_DOUBLE
+				 || $$flags[$i] == DBI::SQL_NUMERIC) {
+			# we don't need to quote numeric values, but
+			# we have to check for empty input
+			unless (defined $values[$i] && $values[$i] =~ /\S/) {
+				$values[$i] = 'NULL';
+			}
+		} elsif (defined $values[$i]) {
+			$values[$i] = $self -> quote ($values[$i]);
+        } else {
             $values[$i] = 'NULL';
         }
     }
@@ -481,30 +495,38 @@ sub rows
 	$rows;
   }
 
-# ---------------------------------------------
-# METHOD: makemap TABLE KEYCOL VALCOL
-# ---------------------------------------------
+# -----------------------------------------------
+# METHOD: makemap TABLE KEYCOL VALCOL [CONDITION]
+# -----------------------------------------------
 
 =over 4
 
-=item makemap I<table> I<keycol> I<valcol>
+=item makemap I<table> I<keycol> I<valcol> [I<condition>]
 
     $dbi_interface -> makemap ('components', 'id', 'price');
-    
+    $dbi_interface -> makemap ('components', 'id', 'price', 'price > 10');
+
 Produces a mapping between the values within column
-I<keycol> and column I<valcol> from I<table>.
+I<keycol> and column I<valcol> from I<table>. If an
+I<condition> is given, only rows matching this
+I<condition> are used for the mapping.    
 
 =back
 
 =cut
 
 sub makemap {
-    my ($self, $table, $keycol, $valcol) = @_;
+    my ($self, $table, $keycol, $valcol, $condition) = @_;
     my ($sth, $row, %map);
 
-    # read all rows from the specified table
-    $sth = $self -> process ("SELECT $keycol, $valcol FROM $table");
-
+    if (defined $condition) {
+        # read matching rows from the specified table
+        $sth = $self -> process ("SELECT $keycol, $valcol FROM $table WHERE $condition");
+    } else {
+        # read all rows from the specified table
+        $sth = $self -> process ("SELECT $keycol, $valcol FROM $table");
+    }
+    
     while ($row = $sth -> fetch) {
         $map{$$row[0]} = $$row[1];
     }
@@ -621,9 +643,13 @@ Produces plain text representation of the database table
 I<table>. This method accepts the following options as I<name>/I<value>
 pairs:
 
+B<columns>: Which columns to display.
+
 B<order>: Which column to sort the row after.
 
 B<limit>: Maximum number of rows to display.
+
+B<separator>: Separator inserted between the columns.
 
 B<where>: Display only rows matching this condition.
 
@@ -640,7 +666,11 @@ sub view
     my ($self, $table, %options) = @_;
     my ($view, $sth);
     my ($orderstr, $condstr) = ('', '');
-    
+	my (@fields);
+
+    unless (exists $options{'limit'}) {$options{'limit'} = 0}
+    unless (exists $options{'separator'}) {$options{'separator'} = "\t"}
+
     # anonymous function for cells in top row
     # get contents of the table
     if ((exists ($options{'order'}) && $options{'order'})) {
@@ -648,19 +678,102 @@ sub view
     }
     if ((exists ($options{'where'}) && $options{'where'})) {
       $condstr = " WHERE $options{'where'}";
-    } 
-    $sth = $self -> process ("SELECT * FROM $table$condstr$orderstr");
-    my $names = $sth -> {NAME};
-    $view = join(" | ", map {$_} @$names) . "\n";
-    my $count;
-    while((my $ref = $sth->fetch) && ($count != $options{'limit'})) {
-      $count++;
-      $view .= join("| ", map {$_} @$ref) . "\n";
     }
-    my $rows = $sth -> rows;
-    $view .="($rows rows)";
+	if ((exists ($options{'columns'}) && $options{'columns'})) {
+	  $sth = $self -> process ('SELECT ' . $options{'columns'}
+							   . " FROM $table$condstr$orderstr");
+	} else {
+      $sth = $self -> process ("SELECT * FROM $table$condstr$orderstr");
+	}
+    my $names = $sth -> {NAME};
+    $view = join($options{'separator'}, map {$_} @$names) . "\n";
+    my ($count, $ref);
+    while($ref = $sth->fetch) {
+      $count++;
+	  undef @fields;
+	  for (@$ref) {
+		  if (defined $_) {
+			  s/\n/\\n/sg;
+			  push (@fields, $_);
+		  } else {
+			  push (@fields, '');
+		  }
+	  }
+      $view .= join($options{'separator'}, @fields) . "\n";
+      last if $count == $options{'limit'};
+    }
+#    my $rows = $sth -> rows;
+#    $view .="($rows rows)";
     $view;
   }
+
+=head1 DATABASE INFORMATION
+
+=over 4
+
+=item is_table I<NAME>
+
+Returns truth value if there exists a table NAME in
+this database.
+
+=back
+
+=cut
+
+sub is_table {
+    my ($self, $name) = shift;
+    
+    grep {$_ eq $name} ($self->tables);
+}
+
+=over 4
+
+=item tables
+
+Returns list of all tables in this database.
+
+=back
+
+=cut
+
+sub tables
+  {
+  my $self = shift;
+
+  # mSQL/mysql doesn't support DBI method tables yet
+  if ($self -> {DRIVER} eq 'mSQL' || $self -> {DRIVER} eq 'mysql')
+	{
+	  $self -> connect () -> func('_ListTables');
+	}
+  else
+	{
+	  # standard method
+	  $self -> connect () -> tables ();
+	}
+  }
+
+=over 4
+
+=item sequences
+
+Returns list of all sequences in this database (Postgres only).
+
+=back
+
+=cut
+
+sub sequences {
+    my $self = shift;
+    my (@sequences, $sth, $row);
+
+    if ($self->{DRIVER} eq 'Pg') {
+        $sth = $self -> process ("SELECT relname FROM pg_class WHERE relkind = 'S'");
+        while ($row = $sth -> fetch ()) {
+            push (@sequences, $$row[0]);
+        }
+    }
+    return @sequences;
+}
 
 # --------------------------------------------
 # METHOD: now
@@ -729,16 +842,29 @@ sub money2num
 	$money;
   }
 
+# ------------------------------------------
 # METHOD: passwd
+#
+# Determines password for current user.
+# This method is implemented only for Mysql,
+# where we can look it up in ~/my.cnf.
+# ------------------------------------------
 
 sub passwd {
     my ($self) = shift;
-    my ($mycnf) = $ENV{'HOME'} . "/.my.cnf";
     my $clientsec = 0;
-    my ($option, $value);
+    my ($mycnf, $option, $value);
     
     # implemented only for mysql
     return unless $self->{'DRIVER'} eq 'mysql';
+
+    # determine home directory
+    if (exists $ENV{'HOME'} && -d $ENV{'HOME'}) {
+        $mycnf = $ENV{'HOME'};
+    } else {
+        $mycnf = (getpwent()) [7];
+    }
+    $mycnf .= '/.my.cnf';
     
     # just give up if file is not accessible
     open (CNF, $mycnf) || return;
@@ -776,28 +902,12 @@ sub prepare {my $self = shift; $self -> prepare (@_);}
 sub commit {$_[0] -> connect () -> commit ();}
 sub quote {$_[0] -> connect () -> quote ($_[1]);}
 
-sub tables
-  {
-  my $self = shift;
-
-  # mSQL/mysql doesn't support DBI method tables yet
-  if ($self -> {DRIVER} eq 'mSQL' || $self -> {DRIVER} eq 'mysql')
-	{
-	  $self -> connect () -> func('_ListTables');
-	}
-  else
-	{
-	  # standard method
-	  $self -> connect () -> tables ();
-	}
-  }
-
 1;
 __END__
 
 =head1 AUTHORS
 
-Stefan Hornburg, racke@linuxia.net
+Stefan Hornburg, racke@linuxia.de
 Dennis Schön, dschoen@rio.gt.owl.de
 
 =head1 SEE ALSO

@@ -1,11 +1,11 @@
 #! /usr/bin/perl -w
 
-# dbs_dumptabdata - creates file set with SQL table data
+# dbs_printtab - creates file set with SQL table data
 
 # This script queries a SQL database and creates one file for each
 # table in the database containing the data of the table.
 
-# Copyright (C) 1999,2000 Stefan Hornburg
+# Copyright (C) 2000 Stefan Hornburg
 
 # Author: Stefan Hornburg <racke@linuxia.de>
 # Maintainer: Stefan Hornburg <racke@linuxia.de>
@@ -27,7 +27,6 @@
 
 use strict;
 use DBIx::Easy;
-use FindBin;
 use Getopt::Long;
 use Term::ReadKey;
 
@@ -35,27 +34,25 @@ use Term::ReadKey;
 my %opts;
 my $whandler = $SIG{__WARN__};
 $SIG{__WARN__} = sub {print STDERR "$0: @_";};
-unless (GetOptions (\%opts, 'exclude-matching-tables=s', 'tables|t=s',
-                    'use-printtab')) {
+unless (GetOptions (\%opts, 'columns|c=s')) {
     exit 1;
 }
 $SIG{__WARN__} = $whandler;
 
+my $USAGE = <<EOT;
+Usage: $0 DRIVER DATABASE TABLE [USER]
+EOT
+
 # sanity check on commandline parameters
-if (exists $opts{'exclude-matching-tables'}) {
-    eval {'' =~ /$opts{'exclude-matching-tables'}/;};
-    if ($@) {
-        $@ =~ s%at /.*$%%;
-        die "$0: $@";
-    }
+if (@ARGV < 3) {
+    warn ($USAGE);
+    exit 1;
 }
 
 my $dbif;
 my $pwdused = 0;
-my $pwd;
-my @tables;
 
-my ($driver, $database, $user) = @ARGV;
+my ($driver, $database, $table, $user) = @ARGV;
 $dbif = new DBIx::Easy ($driver, $database, $user);
 
 # handler for DBI error messages and missing password
@@ -65,89 +62,8 @@ $dbif -> install_handler (\&fatal);
 # for the case that a password is needed
 $dbif -> connect;
 
-# customize dump procedure
-my $dumpproc;
-
-if ($opts{'use-printtab'}) {
-	# generic dump procedure
-	$dumpproc = sub {
-		my ($database, $table) = @_;
-
-		open (DUMP,
-			  "$FindBin::RealBin/dbs_printtab $driver $database $table |")
-			|| die ("$0: Couldn't launch $FindBin::RealBin/dbs_printtab: $!\n");
-		print <DUMP>;
-		close (DUMP)
-			|| die ("$0: dbs_printtab execution errors\n");
-	}
-} else {
-	# dump procedure provided by DBMS
-	if ($driver eq 'mysql') {
-		$dumpproc = sub {
-			my ($database, $table) = @_;
-    
-			my $header;
-            my $optstr = '';
-
-            if ($dbif -> {USER}) {
-                $optstr = " -u " . $dbif -> {USER};
-            }
-            if ($dbif -> {HOST}) {
-                $optstr .= " -h " . $dbif -> {HOST};
-            }
-            if (defined $pwd) {
-                $optstr .= " -p";
-            }
-			# -c: Use complete insert statements.
-			open (DUMP, "mysqldump $database -t $optstr -c $table |")
-				|| die ("$0: Couldn't launch mysqldump: $!\n");
-			while (<DUMP>) {
-				if ($header) {
-					print;
-					next;
-				}
-				# skip header
-				$header = 1 unless (/\S/);
-			}
-			close (DUMP)
-				|| die ("$0: mysqldump execution errors\n");
-		}
-	} elsif ($driver eq 'Pg') {
-		$dumpproc = sub {
-			my ($database, $table) = @_;
-
-			# -D => dump data as inserts with attribute names
-			open (DUMP, "pg_dump $database -a -D -t $table |")
-				|| die ("$0: Couldn't launch pg_dump: $!\n");
-			while (<DUMP>) {
-				print;
-			}
-			close (DUMP)
-				|| die ("$0: pg_dump execution errors\n");
-		}
-	}    
-}
-
-if ($opts{'tables'}) {
-    @tables = split (/,/, $opts{'tables'});
-} else {
-    @tables = $dbif->tables ();
-}
-
-foreach my $table (@tables) {
-    my $outfile = lc($table) . '.sql';
-
-    # skip tables unwanted by user
-    if (exists $opts{'exclude-matching-tables'}) {
-        next if $table =~ /$opts{'exclude-matching-tables'}/;
-    }
-    # call driver dependent dump procedure and fill
-    # output file with the results
-    open (OUT, ">$outfile") || die ("$0: Couldn't open $outfile: $!\n");
-    select (OUT);
-    &$dumpproc ($database, $table);
-    close (OUT);
-}
+# query records in table
+print $dbif -> view ($table, columns => $opts{'columns'});
 
 # -----------------------------------
 # FUNCTION: fatal
@@ -157,6 +73,7 @@ foreach my $table (@tables) {
 
 sub fatal {
   my ($statement, $err, $msg) = @_;
+  my $pwd;
 
   if (is_auth_error ($driver, $err)) {
     unless ($pwdused) {
@@ -220,40 +137,24 @@ sub querypwd () {
 
 =head1 NAME
 
-dbs_dumptabdata - Creates file set with SQL table data
+dbs_printtab - Prints SQL table data on standard output
 
 =head1 DESCRIPTION
 
-dbs_dumptabdata is an utility to create a file set with SQL table data.
-For each table in the database dbs_dumptabdata calls the appropriate dumper
-utility with the output directed to a file named I<table>.sql in the
-current directory. dbs_dumptabdata asks for a password if necessary.
+dbs_printtab is an utility to print SQL table data on
+standard output. dbs_printtab asks for a password if necessary.
 
 =head1 COMMAND LINE PARAMETERS
 
 Required command line parameters are the DBI driver
-(C<Pg> for Postgres or C<mysql> for MySQL)
-and the database name. The third parameter is optionally
+(C<Pg> for Postgres or C<mysql> for MySQL), the database name
+and the table name. The fourth parameter is optionally
 and specifies the database user and/or the host where the
 database resides (C<racke>, C<racke@linuxia.de> or C<@linuxia.de>).
 
-=head1 COMMAND LINE OPTIONS
-
-=head2 B<-t> TABLE[,TABLE,...], B<--tables>=TABLE[,TABLE,...]
-
-Comma-separated list of tables to dump.
-
-=head2 B<--exclude-matching-tables>=REGEXP
-
-Excludes any table matching the regular expression REGEXP from dumping.
-
-=head2 B<--use-printtab>
-
-Uses C<dbs_printtab> instead of the dumper utility provided by the DBMS.
-
 =head1 BUGS
 
-msql is not supported.
+msql is not fully supported.
 
 =head1 AUTHOR
 
