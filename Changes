@@ -1,5 +1,66 @@
 Revision history for Perl module DBIx::Easy.
 
+* Sat Dec  9 02:13:00 2001 CET Stefan Hornburg (Racke) <racke@linuxia.de>
+
+DBIx::Easy v0.14 released
+
+* Sun Nov 18 14:09:59 2001 CET Stefan Hornburg (Racke) <racke@linuxia.de>
+(Easy.pm): implemented the optional map parameter in the random_row()
+method which was already documented
+
+* Thu Sep 20 17:20:50 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+
+DBIx::Easy v0.13 released
+
+* Thu Sep 20 17:19:19 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(scripts/dbs_update): --cleanse could fail if one of the keys is '0'
+
+* Wed Aug  8 00:15:25 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(Easy.pm): don't use password from ~/.my.cnf for databases on other hosts
+(scripts/dbs_dumptabdata): dbs_printtab is emulated instead called as program
+
+* Tue Aug  7 23:50:54 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(Easy.pm): new method is_auth_error
+
+* Tue Aug  7 22:20:36 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(scripts/dbs_update): --headline and --format=CSV weren't fully compatible
+
+* Mon Aug  6 12:16:17 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(scripts/dbs_printtab): new option --sort
+
+* Tue Jul 24 16:25:10 2001 CEST Dennis Schön <dennis@cobolt.net>
+(Easy.pm): database port is configurable now
+
+* Tue Jul 17 14:14:43 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+
+DBIx::Easy v0.12 released
+
+* Tue Jul 17 13:30:23 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(Easy.pm): new method random_row
+
+* Tue Jul 17 11:51:08 2001 CEST Dennis Schön <dennis@cobolt.net>
+violation of Debian policy fixed (.packlist in binary package)
+
+* Fri Jun 29 11:10:34 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+
+DBIx::Easy v0.11 released
+
+* Sun Jun 24 23:54:34 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(Easy.pm): new method delete
+
+* Wed Mar 28 12:44:31 2001 CEST Stefan Hornburg (Racke) <racke@linuxia.de>
+(scripts/dbs_update): new option --match-sql
+
+* Thu Mar 15 23:54:23 EST 2001 Dennis Schön <dennis@cobolt.net>
+(scripts/{dbs_dumptabdata,dbs_dumptabstruct,dbs_printtab}):
+ Database handler warning fixed
+
+* Mon Feb 12 10:40:37 2001 CET Dennis Schön <dennis@cobolt.net>
+(scripts/dbs_update): Perl 5.6 warnings fixed
+
+* Sat Feb 10 01:10:29 2001 CET Stefan Hornburg <racke@linuxia.de>
+(scripts/dbs_update): Perl warning fixed
+
 * Tue Feb  6 16:46:51 2001 CET Stefan Hornburg <racke@linuxia.de>
 
 DBIx::Easy v0.10 released

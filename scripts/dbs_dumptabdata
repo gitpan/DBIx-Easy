@@ -7,9 +7,9 @@
 
 # Copyright (C) 1999,2000,2001 Stefan Hornburg
 
-# Author: Stefan Hornburg <racke@linuxia.de>
-# Maintainer: Stefan Hornburg <racke@linuxia.de>
-# Version: 0.10
+# Author: Stefan Hornburg (Racke) <racke@linuxia.de>
+# Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
+# Version: 0.13
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -33,9 +33,12 @@ use Term::ReadKey;
 
 # process commandline parameters
 my %opts;
+my $printtabopts = '';
 my $whandler = $SIG{__WARN__};
 $SIG{__WARN__} = sub {print STDERR "$0: @_";};
-unless (GetOptions (\%opts, 'exclude-matching-tables=s', 'tables|t=s',
+unless (GetOptions (\%opts, 'exclude-matching-tables=s',
+					'sort=s',
+					'tables|t=s',
                     'use-printtab')) {
     exit 1;
 }
@@ -74,12 +77,7 @@ if ($opts{'use-printtab'}) {
 		my ($database, $table, $user) = @_;
         
         unless (defined $user) {$user = ''};
-		open (DUMP,
-			  "$FindBin::RealBin/dbs_printtab $driver $database $table $user|")
-			|| die ("$0: Couldn't launch $FindBin::RealBin/dbs_printtab: $!\n");
-		print <DUMP>;
-		close (DUMP)
-			|| die ("$0: dbs_printtab execution errors\n");
+		print $dbif->view ($table);
 	}
 } else {
 	# dump procedure provided by DBMS
@@ -150,6 +148,9 @@ foreach my $table (@tables) {
     close (OUT);
 }
 
+# Destroy Database Object as written in manpage
+undef $dbif;
+
 # -----------------------------------
 # FUNCTION: fatal
 #
@@ -159,7 +160,7 @@ foreach my $table (@tables) {
 sub fatal {
   my ($statement, $err, $msg) = @_;
 
-  if (is_auth_error ($driver, $err)) {
+  if ($dbif->is_auth_error ($err)) {
     unless ($pwdused) {
       print "We need a password.\n";
       $pwd = querypwd();
@@ -177,28 +178,6 @@ sub fatal {
     }
   }
   die ("$statement.\n");
-}
-
-# -----------------------------------------------------------------
-# FUNCTION: is_auth_error DRIVER ERR
-#
-# Determines from the error message ERR and the database DRIVER
-# if the connection couldn't established due to an authentification
-# error or an other cause. Returns a truth value in the first case.
-# -----------------------------------------------------------------
-
-sub is_auth_error ($$) {
-  my ($driver, $err) = @_;
-  
-  if ($driver eq 'mysql') {
-    if (index ($err, "DBI->connect failed: Access denied for user:") == 0) {
-      return 1;
-    }
-  } elsif ($driver eq 'Pg') {
-    if ($err =~ /^DBI->connect failed.+no password supplied/) {
-      return 1;
-    }
-  }
 }
 
 # ----------------------------
@@ -250,7 +229,8 @@ Excludes any table matching the regular expression REGEXP from dumping.
 
 =head2 B<--use-printtab>
 
-Uses C<dbs_printtab> instead of the dumper utility provided by the DBMS.
+Uses generic dump (similar to C<dbs_printtab>) instead of the dumper
+utility provided by the DBMS.
 
 =head1 BUGS
 
@@ -258,7 +238,7 @@ msql is not supported.
 
 =head1 AUTHOR
 
-Stefan Hornburg, racke@linuxia.de
+Stefan Hornburg (Racke), racke@linuxia.de
 
 =head1 SEE ALSO
 

@@ -2,10 +2,10 @@
 
 # Copyright (C) 1999,2000,2001 Stefan Hornburg, Dennis Schön
 
-# Authors: Stefan Hornburg <racke@linuxia.de>
+# Authors: Stefan Hornburg (Racke) <racke@linuxia.de>
 #          Dennis Schön <dennis@cobolt.net>
-# Maintainer: Stefan Hornburg <racke@linuxia.de>
-# Version: 0.10
+# Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
+# Version: 0.14
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -37,7 +37,7 @@ require Exporter;
 
 # Public variables
 use vars qw($cache_structs);
-$VERSION = '0.10';
+$VERSION = '0.14';
 $cache_structs = 1;
 
 use DBI;
@@ -56,6 +56,7 @@ DBIx::Easy - Easy to Use DBI interface
                    time => \$dbi_interface -> now);
 
   $dbi_interface -> update ('components', "table='ram'", price => 100);
+  $rows_deleted = $dbi_interface -> delete ('components', 'stock = 0');
   $dbi_interface -> makemap ('components', 'id', 'price', 'price > 10');
   $components = $dbi_interface -> rows ('components');
   $components_needed = $dbi_interface -> rows ('components', 'stock = 0');
@@ -71,11 +72,13 @@ Currently only the Pg, mSQL and mysql drivers are supported.
   $dbi_interface = new DBIx::Easy qw(Pg template1 racke);
   $dbi_interface = new DBIx::Easy qw(Pg template1 racke aF3xD4_i);
   $dbi_interface = new DBIx::Easy qw(Pg template1 racke@linuxia.de aF3xD4_i);
+  $dbi_interface = new DBIx::Easy qw(Pg template1 racke@linuxia.de:3306 aF3xD4_i);
 
 The required parameters are the database driver
 and the database name. Additional parameters are the database user
 and the password to access the database. To specify the database host
-use the USER@HOST notation for the user parameter.
+use the USER@HOST notation for the user parameter. If you want to specify the
+port to connect to use USER@HOST:PORT.
 
 =head1 DESTROYING A DBI INTERFACE OBJECT
 
@@ -115,6 +118,7 @@ my $maintainer_adr = 'racke@linuxia.de';
 # Keywords for connect()
 my %kwmap = (mSQL => 'database', mysql => 'database', Pg => 'dbname');
 my %kwhostmap = (mSQL => 'host', mysql => 'host', Pg => 'host');
+my %kwportmap = (mysql => 'port', Pg => 'port');
 
 # Whether the DBMS supports transactions
 my %transactmap = (mSQL => 0, mysql => 0, Pg => 1);
@@ -155,10 +159,15 @@ sub new
 	$self ->{USER} = shift;
 	# check for a host part
 	if (defined $self->{USER} && $self->{USER} =~ /@/) {
-	  $self->{HOST} = $';
-	  $self->{USER} = $`;
+		$self->{HOST} = $';
+		$self->{USER} = $`;
+		
 	}
-    $self ->{PASS} = shift;
+    if (defined $self->{HOST} && $self->{HOST} =~ /:/) {
+		$self->{PORT} = $';
+		$self->{HOST} = $`;
+	}
+	$self ->{PASS} = shift;
 	$self ->{CONN} = undef;
 	$self ->{HANDLER} = undef;		# error handler
 
@@ -264,7 +273,11 @@ sub connect ()
 			$dsn .= ';' . $kwhostmap{$self->{DRIVER}}
 				. '=' . $self -> {HOST};
 		}
-
+		# ... optionally the host part
+		if ($self -> {PORT}) {
+			$dsn .= ';' . $kwportmap{$self->{DRIVER}}
+				. '=' . $self -> {PORT};
+		}
         # install warn() handler to catch DBI error messages
         $oldwarn = $SIG{__WARN__};
         $SIG{__WARN__} = sub {$msg = "@_";};
@@ -298,6 +311,8 @@ sub connect ()
 # -------------------------
 
 =head1 METHODS
+
+=head2 DATABASE ACCESS
 
 =over 4
 
@@ -462,6 +477,29 @@ sub update
     }
 }
 
+# ---------------------------------
+# METHOD: delete TABLE [CONDITIONS]
+# ---------------------------------
+
+=over 4
+
+=item delete I<table> I<conditions>
+
+  $dbi_interface -> delete ('components', "stock=0");
+
+Deletes any row of I<table> which fulfill the I<conditions>. Without conditions
+all rows are deleted. Returns the number of rows deleted.
+
+=back
+
+=cut
+
+sub delete {
+	my ($self, $table, $conditions) = @_;
+	my $sth = $self -> process ("delete from $table where $conditions");
+	$sth -> rows();
+}
+
 # -------------------------------
 # METHOD: rows TABLE [CONDITIONS]
 # -------------------------------
@@ -544,6 +582,50 @@ sub makemap {
     }
 
     \%map;
+}
+
+# -----------------------------------------
+# METHOD: random_row TABLE CONDITIONS [MAP]
+# -----------------------------------------
+
+=over 4
+
+=item random_row I<table> I<conditions> [I<map>]
+
+Returns random row of the specified I<table>. If I<map> is set,
+the result is a hash reference of the selected row, otherwise
+an array reference. If the table doesn't contains rows, undefined
+is returned.
+
+=back
+
+=cut
+#'
+
+sub random_row {
+	my ($self, $table, $conditions, $map) = @_;
+	my ($sth, $aref, $row);
+
+	if ($conditions) {
+		$sth = $self -> process ("select * from $table where $conditions");
+	} else {
+		$sth = $self -> process ("select * from $table");
+	}
+	
+	cache ($table, 'NAME', $sth);
+	
+	$aref = $sth -> fetchall_arrayref ();
+	if (@$aref) {
+		$row = $aref->[int(rand(@$aref))];
+
+		if ($map) {
+			# pass back hash reference
+			fold ([$self->columns($table)], $row);
+		} else {
+			# pass back array reference
+			$row;
+		}				   
+	}
 }
 
 # -------------------------------  
@@ -720,7 +802,7 @@ sub view
     $view;
   }
 
-=head1 DATABASE INFORMATION
+=head2 DATABASE INFORMATION
 
 =over 4
 
@@ -807,18 +889,15 @@ Returns list of the column names of I<TABLE>.
 sub columns {
     my ($self, $table) = @_;
     my ($sth);
-    
-    if ($cache_structs) {
-        if (exists $structs{$table} && exists $structs{$table}->{NAME}) {
-            return @{$structs{$table}->{NAME}};
-        }
-    }
+    my (@cols);
+
+	if (@cols = cache($table, 'NAME')) {
+		return @cols;
+	}
     
     $sth = $self -> process ("SELECT * FROM $table WHERE 0 = 1");
 
-    if ($cache_structs) {
-        $structs{$table}->{NAME} = $sth->{NAME};
-    }
+	cache($table, 'NAME', $sth);
     
     @{$sth->{NAME}};
 }
@@ -911,7 +990,7 @@ sub sizemap {
 # Returns representation for the current time.
 # --------------------------------------------
 
-=head1 TIME VALUES
+=head2 TIME VALUES
 
 =over 4
 
@@ -946,7 +1025,7 @@ sub now
 # a numeric one.
 # --------------------------------------------------
 
-=head1 MONETARY VALUES
+=head2 MONETARY VALUES
 
 =over 4
 
@@ -972,6 +1051,37 @@ sub money2num
 	$money;
   }
 
+# -----------------------------------------------------
+# METHOD: is_auth_error MSG
+# -----------------------------------------------------
+
+=head2 MISCELLANEOUS
+
+=over 4
+
+=item is_auth_error I<msg>
+
+This method decides if the error message I<msg>
+is caused by an authentification error or not.
+
+=back
+
+=cut
+
+sub is_auth_error {
+	my ($self, $msg) = @_;
+
+	if ($self->{DRIVER} eq 'mysql') {
+		if ($msg =~ /^DBI->connect(\(database=.*?(;host=.*?)?\))? failed: Access denied for user:/) {
+			return 1;
+		}
+	} elsif ($self->{DRIVER} eq 'Pg') {
+		if ($msg =~ /^DBI->connect failed.+no password supplied/) {
+			return 1;
+		}
+	}
+}
+
 # ------------------------------------------
 # METHOD: passwd
 #
@@ -988,6 +1098,9 @@ sub passwd {
     # implemented only for mysql
     return unless $self->{'DRIVER'} eq 'mysql';
 
+	# makes sense only for the localhost
+	return if $self->{'HOST'};
+	
     # determine home directory
     if (exists $ENV{'HOME'} && -d $ENV{'HOME'}) {
         $mycnf = $ENV{'HOME'};
@@ -1034,11 +1147,37 @@ sub quote {$_[0] -> connect () -> quote ($_[1]);}
 
 # auxiliary functions
 
+# ----------------------------------------------------------------
+# FUNCTION: cache TABLE TYPE [HANDLE]
+#
+# This function handles the internal caching of table informations
+# like column names and types.
+#
+# If HANDLE is provided, the information will be fetched from
+# HANDLE and stored cache, otherwise the information from the
+# cache will be returned.
+# ----------------------------------------------------------------
+
+sub cache {
+	my ($table, $type, $handle) = @_;
+	my (@types);
+
+    if ($cache_structs) {
+		if ($handle) {
+			$structs{$table}->{$type} = $handle->{$type};
+		} else {
+			if (exists $structs{$table} && exists $structs{$table}->{$type}) {
+				return @{$structs{$table}->{$type}};
+			}
+		}
+	}
+}
+
 # ----------------------------------------------
 # FUNCTION: fold ARRAY1 ARRAY2
 #
 # Returns mapping between the elements of ARRAY1
-# and tehe elements fo ARRAY2.
+# and the elements fo ARRAY2.
 # ----------------------------------------------
 
 sub fold {
@@ -1092,7 +1231,7 @@ __END__
 
 =head1 AUTHORS
 
-Stefan Hornburg, racke@linuxia.de
+Stefan Hornburg (Racke), racke@linuxia.de
 Dennis Schön, dennis@cobolt.net
 
 =head1 SEE ALSO
