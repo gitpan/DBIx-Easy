@@ -1,10 +1,10 @@
 #! /usr/bin/perl -w
 
-# Copyright (C) 1999,2000,2001 Stefan Hornburg
+# Copyright (C) 1999,2000,2001,2002,2004 Stefan Hornburg
 
 # Author: Stefan Hornburg (Racke) <racke@linuxia.de>
 # Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
-# Version: 0.13
+# Version: 0.16
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -33,7 +33,8 @@ $SIG{__WARN__} = sub {print STDERR "$0: @_";};
 unless (GetOptions (\%opts, 'cleanse', 'columns|c=s',
                     'file|f=s', 'format=s', 'headline|h',
 					'rows=s', 'keys|k=s',
-					'map|m=s', 'match-sql=s', 'routine|r=s', 'skipbadlines',
+					'map|m=s', 'map-filter=s', 'match-sql=s', 'routine|r=s',
+					'skipbadlines',
 					'table|t=s', 'update-only|o')) {
     exit 1;
 }
@@ -41,31 +42,58 @@ $SIG{__WARN__} = $whandler;
 
 # sanity checks
 my $format = 'TAB';
-my $csv;
+my %inforef = ();
+my %funcref = (CSV => {get_columns => \&get_columns_csv},
+			   TAB => {get_columns => \&get_columns_tab},
+			   XLS => {get_columns => \&get_columns_xls});
+my %mfref = (lc => sub {lc(shift)});
 my $sep_char = ',';
+my $mfsub;
 
 if ($opts{'cleanse'} || $opts{'headline'}) {
     unless ($opts{'table'}) {
         die ("$0: missing table name\n");
     }
 }
+if ($opts{'map-filter'}) {
+	unless (exists($mfref{$opts{'map-filter'}})) {
+		die qq{$0: unknown column name filter "$opts{'map-filter'}"}, "\n";
+	}
+	$mfsub = $mfref{$opts{'map-filter'}};
+}
+
 if ($opts{'format'}) {
 	$format = uc($opts{'format'});
-	unless ($format =~ /^CSV/) {
+
+	if ($format =~ /^CSV/) {
+	  	$format = 'CSV';
+		if ($') {
+			$sep_char = $';
+			$sep_char =~ s/^\s+//;
+			$sep_char =~ s/\s+$//;
+		}
+		eval {
+			require Text::CSV_XS;
+		};
+		if ($@) {
+			die "$0: couldn't load module Text::CSV_XS\n";
+		}
+		$inforef{object} = new Text::CSV_XS ({'binary' => 1, 'sep_char' => $sep_char});
+	} elsif ($format eq 'XLS') {
+		eval {
+			require Spreadsheet::ParseExcel;
+		};
+		if ($@) {
+			die "$0: couldn't load module Spreadsheet::ParseExcel\n";
+		}
+		$inforef{object} = new Spreadsheet::ParseExcel;
+	} else {
 		die ("$0: unknown format \"" . $opts{'format'} . "\"\n");
 	}
-	$format = 'CSV';
-	if ($') {
-		$sep_char = $';
-		$sep_char =~ s/^\s+//;
-		$sep_char =~ s/\s+$//;
-	}
-	require Text::CSV_XS;
-	$csv = new Text::CSV_XS ({'binary' => 1, 'sep_char' => $sep_char});
 }
 
 my %fieldmap;
-my $fd_input = \*STDIN;
+my $fd_input;
 
 my ($sth, $keyfield, $update, $msg);
 my ($table, $fieldnames, @values, $headline);
@@ -107,12 +135,18 @@ if ($opts{'rows'}) {
         $userow{$_} = $rowflag;
     }
 }
-    
+
 if ($opts{'file'}) {
-    # read input from file instead from standard input
-    open (INPUT, $opts{'file'})
+    # read input from file
+	require IO::File;
+	$fd_input = new IO::File;
+    $fd_input->open($opts{'file'})
         || die "$0: couldn't open $opts{'file'}: $!\n";
-    $fd_input = \*INPUT;
+} else {
+	# read input from standard input
+	require IO::Handle;
+	$fd_input = new IO::Handle;
+	$fd_input->fdopen(fileno(STDIN),'r');
 }
 
 if ($opts{'map'}) {
@@ -124,28 +158,35 @@ if ($opts{'map'}) {
     }
 }
 
+my $csv;
+
 if ($opts{'headline'}) {
     my %hcolmap;
     
     # the first row consists of the column names
-    unless (defined ($headline = <$fd_input>)) {
-        die ("$0: empty input file\n");
-    }
+#    unless (defined ($headline = <$fd_input>)) {
+#        die ("$0: empty input file\n");
+#    }
 	my @columns;
-	if ($format eq 'TAB') {
-		@columns = split /\t/, $headline;
-	} elsif ($format eq 'CSV') {
-		$linebuf = '';
+	if ($funcref{$format}->{get_columns}(\%inforef, $fd_input,\@columns) <= 0)  {
+		die "$0: couldn't find headline\n";
+	}
+	
+	if ($format eq 'CSV') {
 		while (! csv_parseline ($csv, \$linebuf, $headline, \@columns)) {
 			unless (defined ($headline = <$fd_input>)) {
 				die ("$0: couldn't find headline\n");
 			}
 		}
 	}
-	
+
+	if ($opts{'map-filter'}) {
+		@columns = map {$mfsub->($_)} @columns;
+	}
+
 	# remove whitespace from column names and mark them
 	map {s/^\s+//; s/\s+$//; $hcolmap{$_} = 1;} @columns;
-	
+
     if ($opts{'map'}) {
         my @newcolumns;
         
@@ -153,6 +194,7 @@ if ($opts{'headline'}) {
         foreach (@columns) {
             if (exists $colmap{$_}) {
                 push (@newcolumns, $colmap{$_});
+				$hcolmap{$colmap{$_}} = 1;
             } else {
                 push (@newcolumns, $_);
             }
@@ -261,22 +303,14 @@ if ($opts{'match-sql'}) {
 	}
 }
 
-MAIN: while (<$fd_input>) {
-    my (@data);
+my $gcsub = $funcref{$format}->{get_columns};
 
-    # skip empty/blank/comment lines
-    next if /^\#/; next if /^\s*$/;
-    # remove newlines and carriage returns
-    chomp;
-    s/\r$//;
+MAIN: while ($gcsub->(\%inforef, $fd_input, \@columns)) {
+    my (@data);
 
     if ($opts{'headline'} || $opts{'table'}) {
         # table name already known
-		if ($format eq 'TAB') {
-			@values = split /\t/;
-		} elsif ($format eq 'CSV') {
-			next unless csv_parseline ($csv, \$linebuf, $_, \@values);
-		}
+		@values = @columns;
     } else {
         # table name is the first column
 		if ($format eq 'TAB') {
@@ -539,7 +573,55 @@ if (length $linebuf) {
 undef $dbif;
 
 if ($opts{'file'}) {
-    close INPUT;
+    $fd_input->close;
+}
+
+# ----------------------------------------
+# FUNCTION: get_columns_tab IREF FD COLREF
+#
+# Get columns from a tab separated file.
+# ----------------------------------------
+
+sub get_columns_tab {
+	my ($iref, $fd, $colref) = @_;
+	my $line;
+	
+	while (defined ($line = <$fd>)) {
+		# skip empty/blank/comment lines
+		next if $line =~ /^\#/; next if $line =~ /^\s*$/;
+		# remove newlines and carriage returns
+		chomp ($line);
+		$line =~ s/\r$//;
+
+		@$colref = split (/\t/, $line);
+		return @$colref;
+	}
+}
+
+# ----------------------------------------
+# FUNCTION: get_columns_xls IREF FD COLREF
+#
+# Get columns from a XLS spreadsheet.
+# ----------------------------------------
+
+sub get_columns_xls {
+	my ($iref, $fd, $colref) = @_;
+
+	unless ($iref->{workbook}) {
+		# parse the spreadsheet once
+		$iref->{workbook} = $iref->{object}->Parse($fd);
+		unless ($iref->{workbook}) {
+			die "$0: couldn't parse spreadsheet\n";
+		}
+		$iref->{worksheet} = $iref->{workbook}->{Worksheet}[0];
+		$iref->{row} = 0;
+	}
+
+	if ($iref->{row} <= $iref->{worksheet}->{MaxRow}) {
+		@$colref = map {$_->Value()}
+			@{$iref->{worksheet}->{Cells}[$iref->{row}++]};
+		return @$colref;
+	}
 }
 
 # -------------------------------------------------
@@ -860,6 +942,11 @@ Maps the names found in the first line of input to the actual column
 names in the database. The alias and the column name are separated
 with C<=> signs and the different entries are separated by C<;> signs,
 e.g. C<Art-No.=code;Short Description=shortdescr'>.
+
+=head2 B<--map-filter>=I<FILTER>
+
+Applies a filter to the column names read from the input file.
+Currently there is only the C<lc> filter available.
 
 =head2 B<--match-sql>=I<FIELD:{STATEMENT}>
 

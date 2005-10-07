@@ -1,11 +1,12 @@
 # Easy.pm - Easy to Use DBI interface
 
 # Copyright (C) 1999,2000,2001,2002 Stefan Hornburg, Dennis Schön
+# Copyright (C) 2003,2004,2005 Stefan Hornburg (Racke) <racke@linuxia.de>
 
 # Authors: Stefan Hornburg (Racke) <racke@linuxia.de>
-#          Dennis Schön <dennis@cobolt.net>
+#          Dennis Schön <ds@1d10t.de>
 # Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
-# Version: 0.15
+# Version: 0.16
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -37,7 +38,7 @@ require Exporter;
 
 # Public variables
 use vars qw($cache_structs);
-$VERSION = '0.15';
+$VERSION = '0.16';
 $cache_structs = 1;
 
 use DBI;
@@ -64,7 +65,7 @@ DBIx::Easy - Easy to Use DBI interface
 =head1 DESCRIPTION
 
 DBIx::Easy is an easy to use DBI interface.
-Currently the Pg, mSQL, mysql, sybase and ODBC drivers are supported.
+Currently the Pg, mSQL, mysql, Sybase, ODBC and XBase drivers are supported.
 
 =head1 CREATING A NEW DBI INTERFACE OBJECT
 
@@ -108,6 +109,10 @@ called.
 By default, this module caches table structures. This can be
 disabled by setting I<$DBIx::Easy::cache_structs> to 0.
 
+=head1 XBASE DRIVER
+
+The DBIx::Easy method rows fails to work with the DBD::XBase driver.
+
 =cut
 
 # Private Variables
@@ -117,14 +122,14 @@ my $maintainer_adr = 'racke@linuxia.de';
 
 # Keywords for connect()
 my %kwmap = (mSQL => 'database', mysql => 'database', Pg => 'dbname',
-			sybase => 'database', ODBC => '');
+			Sybase => 'database', ODBC => '', XBase => '');
 my %kwhostmap = (mSQL => 'host', mysql => 'host', Pg => 'host',
-				 sybase => 'server', ODBC => '');
+				 Sybase => 'server', ODBC => '', XBase => '');
 my %kwportmap = (mysql => 'port', Pg => 'port');
 
 # Whether the DBMS supports transactions
-my %transactmap = (mSQL => 0, mysql => 0, Pg => 1, sybase => 'server',
-				  ODBC => 0);
+my %transactmap = (mSQL => 0, mysql => 0, Pg => 1, Sybase => 'server',
+				  ODBC => 0, XBase => 0);
   
 # Statement generators for serial()
 my %serialstatmap = (mSQL => sub {"SELECT _seq FROM $_[0]";},
@@ -140,10 +145,13 @@ my %obtstatmap = (mSQL => sub {my $table = shift;
 				  Pg => sub {my $table = shift;
 							 "SELECT " . join (', ', @_)
 							   . " FROM $table WHERE FALSE";},
-				  sybase => sub {my $table = shift;
+				  Sybase => sub {my $table = shift;
 							   "SELECT " . join (', ', @_)
                                  . " FROM $table WHERE 0 = 1";},
 				  ODBC => sub {my $table = shift;
+							   "SELECT " . join (', ', @_)
+                                 . " FROM $table WHERE 0 = 1";},
+				  XBase => sub {my $table = shift;
 							   "SELECT " . join (', ', @_)
                                  . " FROM $table WHERE 0 = 1";});
   
@@ -151,7 +159,7 @@ my %obtstatmap = (mSQL => sub {my $table = shift;
 my %funcmap = (mSQL => {COUNT => 0},
 			   mysql => {COUNT => 1},
 			   Pg => {COUNT => 1},
-			   sybase => {COUNT => 1},
+			   Sybase => {COUNT => 1},
 			   ODBC => {COUNT => 0});
 
 # Cache
@@ -184,20 +192,25 @@ sub new
 
 	bless ($self, $class);
 	
-    # sanity checks    
+    # sanity check: driver
     unless (defined ($self -> {DRIVER}) && $self->{DRIVER} =~ /\S/) {
-      $self -> fatal ("No driver selected for $class.");
+		$self -> fatal ("No driver selected for $class.");
     }
-    unless (defined ($self -> {DATABASE}) && $self->{DATABASE} =~ /\S/) {
-      $self -> fatal ("No database selected for $class.");
+	unless (exists $kwmap{$self -> {DRIVER}}) {
+		$self -> fatal ("Sorry, $class doesn't support the \""
+						. $self -> {DRIVER} . "\" driver.\n" 
+						. "Please send mail to $maintainer_adr for more information.\n");
     }
 
-    # check if this driver is supported
-	unless (exists $kwmap{$self -> {DRIVER}}) {
-      $self -> fatal ("Sorry, $class doesn't support the \""
-                      . $self -> {DRIVER} . "\" driver.\n" 
-                      . "Please send mail to $maintainer_adr for more information.\n");
+	# sanity check: database name
+    unless (defined ($self -> {DATABASE}) && $self->{DATABASE} =~ /\S/) {
+		# ok for sybase with host
+		unless ($self->{DRIVER} eq 'Sybase' && $self->{HOST}) {
+			$self -> fatal ("No database selected for $class.");
+		}
     }
+
+	return $self if $^O eq 'MSWin32';
 
     # we may try to get password from DBMS specific
     # configuration file
@@ -254,9 +267,11 @@ sub fatal {
 		&{$self -> {'HANDLER'}} ($info, $err, $errstr);
     } elsif (defined $self -> {CONN}) {
 		die "$info (DBERR: $err, DBMSG: $errstr)\n";
-    } else {
+    } elsif ($err) {
 		die "$info ($err)\n";
-    }
+    } else {
+		die "$info\n";
+	}
 }
 
 # ---------------------------------------------------------------
@@ -348,7 +363,7 @@ sub process
   my ($self, $statement) = @_;
   my ($sth, $rv);
   
-  $self -> connect ();
+  return unless $self -> connect ();
 
   # prepare and execute it
   $sth = $self -> {CONN} -> prepare ($statement)
@@ -387,7 +402,7 @@ sub insert ($$$;@)
 	my ($statement, $sthtest, $flags);
 	my ($column, $value);
 
-	$self -> connect ();
+	return unless $self -> connect ();
 
 	while ($#_ >= 0)
 	  {
@@ -447,8 +462,9 @@ sub insert ($$$;@)
 =item update I<table> I<conditions> I<column> I<value> [I<column> I<value>] ...
 
   $dbi_interface -> update ('components', "table='ram'", price => 100);
+  $dbi_interface -> update ('components', "table='ram'", price => \"price + 20");
 
-Updates any row of I<table> which fulfill the I<conditions> by inserting the given I<column>/I<value> pairs. Returns the number of rows modified.
+Updates any row of I<table> which fulfill the I<conditions> by inserting the given I<column>/I<value> pairs. Scalar references can be used to embed strings without further quoting into the resulting SQL statement. Returns the number of rows modified.
 
 =back
 
@@ -464,19 +480,22 @@ sub update
 	my ($column, $value);
 
 	# ensure that connection is established
-	$self -> connect ();
+	return unless $self -> connect ();
 	
-	while ($#_ >= 0)
-	  {
+	while ($#_ >= 0) {
 		$column = shift; $value = shift;
         # avoid Perl warning
         if (defined $value) {
-            $value = $self -> {CONN} -> quote ($value);
+		    if (ref($value) eq 'SCALAR') {
+				$value = $$value;
+			} else {
+				$value = $self -> {CONN} -> quote ($value);
+			}
         } else {
             $value = 'NULL';
         }
 		push (@columns, $column . ' = ' . $value);
-	  }
+	}
 
 	# now the statement
 	$statement = "UPDATE $table SET "
@@ -490,6 +509,40 @@ sub update
     } else {
         $self -> fatal ("Couldn't execute statement \"$statement\"");
     }
+}
+
+# ---------------------------------------------------------------
+# METHOD: put TABLE CONDITIONS COLUMN VALUE [COLUMN VALUE] ...
+#
+# Either updates the rows matching CONDITIONS with the given
+# COLUMN/VALUE pairs or puts (inserts) them into TABLE.
+# Returns the number of modified rows (1 in case of an insert).
+# ---------------------------------------------------------------
+
+=over 4
+
+=item put I<table> I<conditions> I<column> I<value> [I<column> I<value>] ...
+
+=back
+
+=cut
+
+sub put
+  {
+	my $self = shift;
+	my $table  = shift;
+	my $conditions = shift;
+
+	# ensure that connection is established
+	return unless $self -> connect ();
+
+	# check for existing rows
+	if ($self->rows($table, $conditions)) {
+		$self->update($table, $conditions, @_);
+	} else {
+		$self->insert($table, @_);
+		1;
+	}
 }
 
 # ---------------------------------
@@ -511,7 +564,14 @@ all rows are deleted. Returns the number of rows deleted.
 
 sub delete {
 	my ($self, $table, $conditions) = @_;
-	my $sth = $self -> process ("delete from $table where $conditions");
+	my $sth;
+
+    if ($conditions) {
+		$sth = $self -> process ("delete from $table where $conditions");
+	} else {
+		$sth = $self -> process ("delete from $table");
+	}
+
 	$sth -> rows();
 }
 
@@ -568,13 +628,18 @@ sub rows
 
 =item makemap I<table> I<keycol> I<valcol> [I<condition>]
 
-    $dbi_interface -> makemap ('components', 'id', 'price');
-    $dbi_interface -> makemap ('components', 'id', 'price', 'price > 10');
+    $dbi_interface -> makemap ('components', 'idf', 'price');
+    $dbi_interface -> makemap ('components', 'idf', 'price', 'price > 10');
+    $dbi_interface -> makemap ('components', 'idf', '*');
+    $dbi_interface -> makemap ('components', 'idf', '*', 'price > 10');
 
 Produces a mapping between the values within column
 I<keycol> and column I<valcol> from I<table>. If an
 I<condition> is given, only rows matching this
 I<condition> are used for the mapping.    
+
+In order to get the hash reference to the record as value of the
+mapping, use the asterisk as the I<valcol> parameter.
 
 =back
 
@@ -582,20 +647,28 @@ I<condition> are used for the mapping.
 
 sub makemap {
     my ($self, $table, $keycol, $valcol, $condition) = @_;
-    my ($sth, $row, %map);
+    my ($sth, $row, %map, $sel);
+	my $condstring = '';
 
-    if (defined $condition) {
-        # read matching rows from the specified table
-        $sth = $self -> process ("SELECT $keycol, $valcol FROM $table WHERE $condition");
-    } else {
-        # read all rows from the specified table
-        $sth = $self -> process ("SELECT $keycol, $valcol FROM $table");
-    }
-    
-    while ($row = $sth -> fetch) {
-        $map{$$row[0]} = $$row[1];
-    }
-
+	# check for condition
+	if ($condition) {
+		$condstring = " WHERE $condition";
+	}
+	
+	if ($valcol eq '*') {
+		# need hash reference as value
+		$sth = $self->process("SELECT * FROM $table$condstring");
+		while ($row = $sth -> fetchrow_hashref) {
+			$map{$row->{$keycol}} = $row;
+		}
+	} else {
+        # need particular field as value
+		$sth = $self -> process ("SELECT $keycol, $valcol FROM $table$condstring");
+		while ($row = $sth -> fetch) {
+			$map{$$row[0]} = $$row[1];
+		}
+	}
+	
     \%map;
 }
 
@@ -669,7 +742,7 @@ sub serial
 	my ($table, $sequence) = @_;
 	my ($statement, $sth, $rv, $resref);
 	
-	$self -> connect ();
+	return unless $self -> connect ();
     return ('0') if $self->{DRIVER} eq 'mysql';
 
 	# get the appropriate statement
@@ -846,21 +919,16 @@ Returns list of all tables in this database.
 
 =cut
 
-sub tables
-  {
-  my $self = shift;
-
-  # mSQL/mysql doesn't support DBI method tables yet
-  if ($self -> {DRIVER} eq 'mSQL' || $self -> {DRIVER} eq 'mysql')
-	{
-	  $self -> connect () -> func('_ListTables');
+sub tables {
+	my $self = shift;
+	my @t;
+	
+	if ($self->{DRIVER} eq 'mysql') {
+		map {s/^`(.*)`$/$1/; $_}  ($self -> connect () -> tables ());
+	} else {
+		$self -> connect () -> tables ();
 	}
-  else
-	{
-	  # standard method
-	  $self -> connect () -> tables ();
-	}
-  }
+}
 
 =over 4
 
@@ -911,9 +979,9 @@ sub columns {
 	}
     
     $sth = $self -> process ("SELECT * FROM $table WHERE 0 = 1");
-
+	
 	cache($table, 'NAME', $sth);
-    
+	
     @{$sth->{NAME}};
 }
 
@@ -999,6 +1067,107 @@ sub sizemap {
     $self->info_proc ($table, 'PRECISION', 1);
 }
 
+# ---------------------------------------------------------------
+# METHOD: add_columns
+#
+# Creates columns from a representation supplied by describe_table.
+# ---------------------------------------------------------------
+
+sub add_columns {
+	my ($self, $table, $repref, @columns) = @_;
+	my (%colref, $col, $cref, $null, $line, @stmts, $cmd);
+	
+	for $col (@columns) {
+		$colref{$col} = 1;
+	}
+
+	for $cref (@{$repref->{columns}}) {
+		next unless exists $colref{$cref->{Field}};
+		$colref{$cref->{Field}} = $cref;
+	}
+
+	for $col (@columns) {
+		$cref = $colref{$col};
+		if ($cref->{Null} ne 'YES') {
+			$null = ' NOT NULL ';
+		} else {
+			$null = '';
+		}
+		$line = qq{alter table $table add $cref->{Field} $cref->{Type}$null $cref->{Extra} default '$cref->{Default}'};
+		push (@stmts, $line);
+	}
+
+	for $cmd (@stmts) {
+		$self->process($cmd);
+	}
+}
+
+
+# ---------------------------------------------------------------
+# METHOD: create_table
+#
+# Creates table from a representation supplied by describe_table.
+# ---------------------------------------------------------------
+
+sub create_table {
+	my ($self, $table, $repref) = @_;
+	my $crtstr = '';
+	my (@stmts, $line, $null, %icols, $colstr);
+	
+	for my $cref (@{$repref->{columns}}) {
+		if ($cref->{Null} ne 'YES') {
+			$null = ' NOT NULL ';
+		} else {
+			$null = '';
+		}
+		$line = qq{$cref->{Field} $cref->{Type}$null $cref->{Extra} default '$cref->{Default}'};
+		push (@stmts, $line);
+	}
+
+	for my $cref (@{$repref->{indices}}) {
+		push (@{$icols{$cref->{Key_name}}}, $cref->{Column_name});
+	}
+
+	for my $cref (@{$repref->{indices}}) {
+		next unless exists $icols{$cref->{Key_name}};
+		$colstr = join(', ', @{$icols{$cref->{Key_name}}});
+		if ($cref->{Key_name} eq 'PRIMARY') {
+			$line = qq{PRIMARY KEY ($colstr)};
+		} else {
+			$line = qq{KEY $cref->{Key_name} ($colstr)};
+		}
+		push (@stmts, $line);
+		delete $icols{$cref->{Key_name}};
+	}
+	$crtstr = "create table $table (\n" . join(",\n", @stmts) . ")";
+	$self->process($crtstr);
+}
+
+# ------------------------------------------
+# METHOD: describe_table
+#
+# Returns representation of the given table.
+# ------------------------------------------
+
+sub describe_table {
+	my ($self, $table) = @_;
+	my ($sth, $href);
+	my %rep = (columns => [], indices => []);
+	
+	$sth = $self->process("show columns from $table");
+	while (my $href = $sth->fetchrow_hashref()) {
+		push (@{$rep{columns}}, $href);
+	}
+	$sth->finish();
+	
+	$sth = $self->process("show index from $table");
+	while (my $href = $sth->fetchrow_hashref()) {
+		push (@{$rep{indices}}, $href);
+	}
+	$sth->finish();
+	\%rep;
+}
+
 # --------------------------------------------
 # METHOD: now
 #
@@ -1066,6 +1235,53 @@ sub money2num
 	$money;
   }
 
+# METHOD: filter HANDLE FUNC [TABLE] OPT
+
+my %filter_default_opts = (col_delim => "\t",
+                           col_delim_rep => '\t',
+                           prepend_key => undef,
+                           row_delim => "\n",
+                           row_delim_rep => '\n',
+                           return => '',
+                           prepend_row => undef);
+
+sub filter {
+	my ($self, $sth, $opt) = @_;
+	my (@keys, $row, @ret);
+
+    for (keys %filter_default_opts) {
+        $opt->{$_} = $filter_default_opts{$_}
+            unless defined $opt->{$_};
+    }
+
+    if ($opt->{prepend_key}) {
+        @keys = @{$sth->{NAME}};
+    }
+
+	while ($row = $sth->fetch()) {
+        if ($opt->{return} eq 'keys') {
+            push(@ret, $row->[0]);
+        }
+        my @f;
+        my $i = 0;
+        for my $f (@$row) {
+            $f = '' unless defined $f;
+            $f =~ s/$opt->{row_delim}/$opt->{row_delim_rep}/g;
+            $f =~ s/$opt->{col_delim}/$opt->{col_delim_rep}/g;
+            if (defined $opt->{prepend_key}) {
+                $f = $keys[$i++] . $opt->{prepend_key} . $f;
+            }
+            push(@f, $f);
+        }
+        if (defined $opt->{prepend_row}) {
+            print $opt->{prepend_row};
+        }
+        print join($opt->{col_delim}, @f), $opt->{row_delim};
+	}
+
+	@ret;
+}
+
 # -----------------------------------------------------
 # METHOD: is_auth_error MSG
 # -----------------------------------------------------
@@ -1117,10 +1333,10 @@ sub passwd {
 	return if $self->{'HOST'};
 	
     # determine home directory
-    if (exists $ENV{'HOME'} && -d $ENV{'HOME'}) {
+    if (exists $ENV{'HOME'} && $ENV{'HOME'} =~ /\S/ && -d $ENV{'HOME'}) {
         $mycnf = $ENV{'HOME'};
     } else {
-        $mycnf = (getpwent()) [7];
+        $mycnf = (getpwuid($>)) [7];
     }
     $mycnf .= '/.my.cnf';
 
@@ -1156,8 +1372,9 @@ sub passwd {
 sub install_handler {$_[0] -> {'HANDLER'} = $_[1];}
 
 # direct interface to DBI
-sub prepare {my $self = shift; $self -> prepare (@_);}
+sub prepare {$_[0] -> connect () -> prepare (@_);}
 sub commit {$_[0] -> connect () -> commit ();}
+sub rollback {$_[0] -> connect () -> rollback ();}
 sub quote {$_[0] -> connect () -> quote ($_[1]);}
 
 # auxiliary functions
@@ -1176,7 +1393,7 @@ sub quote {$_[0] -> connect () -> quote ($_[1]);}
 sub cache {
 	my ($table, $type, $handle) = @_;
 	my (@types);
-
+	
     if ($cache_structs) {
 		if ($handle) {
 			$structs{$table}->{$type} = $handle->{$type};
@@ -1186,6 +1403,8 @@ sub cache {
 			}
 		}
 	}
+
+	return;
 }
 
 # ----------------------------------------------
@@ -1247,17 +1466,17 @@ __END__
 =head1 AUTHORS
 
 Stefan Hornburg (Racke), racke@linuxia.de
-Dennis Schön, dennis@cobolt.net
+Dennis Schön, ds@1d10t.de
 
 Support for Sybase and ODBC provided by
 David B. Bitton <david@codenoevil.com>.
 
 =head1 VERSION
 
-0.15
+0.16
 
 =head1 SEE ALSO
 
-perl(1), DBI(3), DBD::Pg(3), DBD::mysql(3), DBD::msql(3), DBD::sybase(3), DBD::ODBC(3).
+perl(1), DBI(3), DBD::Pg(3), DBD::mysql(3), DBD::msql(3), DBD::Sybase(3), DBD::ODBC(3).
 
 =cut
