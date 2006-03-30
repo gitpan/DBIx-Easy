@@ -1,0 +1,37 @@
+#!/bin/sh
+# $Id: Distro,v 1.4 2006/03/30 12:08:08 jettero Exp $
+
+./distclean
+perl Makefile.PL && make dist
+
+mkdir -p dist
+
+n=`ls DBI*Easy*gz`;
+date=`date`;
+cat Easy/MySQL.pm  | pod2html > ./dist/DEMySQL.html
+cat Easy/SQLite.pm | pod2html > ./dist/DESQLite.html
+rm -vf pod* ./dist/DBI*Easy*gz
+mv -v DBI*Easy*gz ./dist
+
+cat > ./dist/DEMySQL.b.html << EOF
+<p>
+This (<a href="$n">$n</a>) is something I've been using over and over.  I don't
+remember how I used to live without it.  So, I give it to you.
+Don't use it if you don't like it! :)  
+Check out the man page: <a href="?eo_cat=DEMySQL.html">DBIx::Easy::MySQL module</a>.
+Last updated on $date
+EOF
+
+cat > ./dist/DESQLite.b.html << EOF
+<p>
+This (<a href="$n">$n</a>) is based off (and comes with) the DBIx::Easy::MySQL module above.
+It's really just the same basic idea expanded to mysql -- for consistancy.
+Check out the man page: <a href="?eo_cat=DESQLite.html">DBIx::Easy::SQLite module</a>.
+Last updated on $date
+EOF
+
+ssh mei.net "(cd /home/dillhome/voltar/html/PerlModules/; rm *DBI*Easy*)"
+scp dist/* mei.net:/home/dillhome/voltar/html/PerlModules/
+ssh mei.net "(cd /home/dillhome/voltar/html/PerlModules/; chmod 644 *.html *.gz)"
+
+rm -rvf dist
