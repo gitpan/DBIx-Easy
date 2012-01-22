@@ -1,12 +1,12 @@
 # Easy.pm - Easy to Use DBI interface
 
-# Copyright (C) 1999,2000,2001,2002 Stefan Hornburg, Dennis Schön
-# Copyright (C) 2003,2004,2005,2006,2007,2008 Stefan Hornburg (Racke) <racke@linuxia.de>
+# Copyright (C) 1999-2002 Stefan Hornburg, Dennis Schön
+# Copyright (C) 2003-2012 Stefan Hornburg (Racke) <racke@linuxia.de>
 
 # Authors: Stefan Hornburg (Racke) <racke@linuxia.de>
 #          Dennis Schön <ds@1d10t.de>
 # Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
-# Version: 0.18
+# Version: 0.19
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -38,7 +38,7 @@ require Exporter;
 
 # Public variables
 use vars qw($cache_structs);
-$VERSION = '0.18';
+$VERSION = '0.19';
 $cache_structs = 1;
 
 use DBI;
@@ -305,8 +305,16 @@ sub connect ()
 		}
 		# ... optionally the host part
 		if ($self -> {PORT}) {
+		    if ($self->{PORT} =~ m%/%
+			&& $self->{DRIVER} eq 'mysql') {
+			# got socket passed as port
+			$dsn .= ';' . 'mysql_socket'
+				. '=' . $self -> {PORT};
+		    }
+		    else {
 			$dsn .= ';' . $kwportmap{$self->{DRIVER}}
 				. '=' . $self -> {PORT};
+		    }
 		}
         # install warn() handler to catch DBI error messages
         $oldwarn = $SIG{__WARN__};
