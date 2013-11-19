@@ -1,12 +1,12 @@
 # Easy.pm - Easy to Use DBI interface
 
 # Copyright (C) 1999-2002 Stefan Hornburg, Dennis Schön
-# Copyright (C) 2003-2012 Stefan Hornburg (Racke) <racke@linuxia.de>
+# Copyright (C) 2003-2013 Stefan Hornburg (Racke) <racke@linuxia.de>
 
 # Authors: Stefan Hornburg (Racke) <racke@linuxia.de>
 #          Dennis Schön <ds@1d10t.de>
 # Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
-# Version: 0.19
+# Version: 0.20
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -38,7 +38,7 @@ require Exporter;
 
 # Public variables
 use vars qw($cache_structs);
-$VERSION = '0.19';
+$VERSION = '0.20';
 $cache_structs = 1;
 
 use DBI;
@@ -126,6 +126,11 @@ my %kwmap = (mSQL => 'database', mysql => 'database', Pg => 'dbname',
 my %kwhostmap = (mSQL => 'host', mysql => 'host', Pg => 'host',
 				 Sybase => 'server', ODBC => '', XBase => '');
 my %kwportmap = (mysql => 'port', Pg => 'port');
+
+my %kwutf8map = (mysql => 'mysql_enable_utf8', 
+		 Pg => 'pg_enable_utf8',
+		 SQLite => 'sqlite_unicode', 
+		 Sybase => 'syb_enable_utf8');
 
 # Whether the DBMS supports transactions
 my %transactmap = (mSQL => 0, mysql => 0, Pg => 1, Sybase => 'server',
@@ -284,7 +289,7 @@ sub fatal {
 sub connect ()
   {
 	my $self = shift;
-	my ($dsn, $oldwarn);
+	my ($dsn, $oldwarn, %dbi_params);
 	my $msg = '';
     
 	unless (defined $self -> {CONN})
@@ -319,10 +324,18 @@ sub connect ()
         # install warn() handler to catch DBI error messages
         $oldwarn = $SIG{__WARN__};
         $SIG{__WARN__} = sub {$msg = "@_";};
-        
-		$self -> {CONN} = DBI
-            -> connect ($dsn, $self -> {USER}, $self -> {PASS},
-                        {AutoCommit => !$transactmap{$self->{DRIVER}}});
+
+		$dbi_params{AutoCommit} = !$transactmap{$self->{DRIVER}};
+
+		if (exists $kwutf8map{$self->{DRIVER}}) {
+		    $dbi_params{$kwutf8map{$self->{DRIVER}}} = 1;
+                }
+
+		$self->{CONN} = DBI->connect ($dsn, 
+					      $self -> {USER}, 
+					      $self -> {PASS},
+					      \%dbi_params,
+		    );
 
         # deinstall warn() handler
         $SIG{__WARN__} = $oldwarn;
@@ -419,22 +432,18 @@ sub insert ($$$;@)
 		push (@values, $value);
 	  }
 
-	# get the table structure
-	$sthtest = $self -> process
-	  (&{$obtstatmap{$self -> {'DRIVER'}}} ($table, @columns));
-	$flags = $sthtest -> {'TYPE'};
-    $sthtest -> finish ();
-
+    $flags = $self->typemap($table);
+    
 	for (my $i = 0; $i <= $#values; $i++) {
         if (ref ($values[$i]) eq 'SCALAR') {
 			$values[$i] = ${$values[$i]};
-        } elsif ($$flags[$i] == DBI::SQL_INTEGER
-				 || $$flags[$i] == DBI::SQL_SMALLINT
-				 || $$flags[$i] == DBI::SQL_DECIMAL
-				 || $$flags[$i] == DBI::SQL_FLOAT
-				 || $$flags[$i] == DBI::SQL_REAL
-				 || $$flags[$i] == DBI::SQL_DOUBLE
-				 || $$flags[$i] == DBI::SQL_NUMERIC) {
+        } elsif ($flags->{$columns[$i]} == DBI::SQL_INTEGER
+				 || $flags->{$columns[$i]} == DBI::SQL_SMALLINT
+				 || $flags->{$columns[$i]} == DBI::SQL_DECIMAL
+				 || $flags->{$columns[$i]} == DBI::SQL_FLOAT
+				 || $flags->{$columns[$i]} == DBI::SQL_REAL
+				 || $flags->{$columns[$i]} == DBI::SQL_DOUBLE
+				 || $flags->{$columns[$i]} == DBI::SQL_NUMERIC) {
 			# we don't need to quote numeric values, but
 			# we have to check for empty input
 			unless (defined $values[$i] && $values[$i] =~ /\S/) {
@@ -1532,7 +1541,7 @@ David B. Bitton <david@codenoevil.com>.
 
 =head1 VERSION
 
-0.18
+0.20
 
 =head1 SEE ALSO
 
