@@ -6,7 +6,7 @@
 # Authors: Stefan Hornburg (Racke) <racke@linuxia.de>
 #          Dennis Schön <ds@1d10t.de>
 # Maintainer: Stefan Hornburg (Racke) <racke@linuxia.de>
-# Version: 0.20
+# Version: 0.21
 
 # This file is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -38,7 +38,7 @@ require Exporter;
 
 # Public variables
 use vars qw($cache_structs);
-$VERSION = '0.20';
+$VERSION = '0.21';
 $cache_structs = 1;
 
 use DBI;
@@ -962,7 +962,7 @@ this database.
 =cut
 
 sub is_table {
-    my ($self, $name) = shift;
+    my ($self, $name) = @_;
     
     grep {$_ eq $name} ($self->tables);
 }
@@ -982,10 +982,13 @@ sub tables {
 	my @t;
 	
 	if ($self->{DRIVER} eq 'mysql') {
-		map {s/^`(.*)`$/$1/; $_}  ($self -> connect () -> tables ());
+        my $dbname = $self->{DATABASE};
+        @t = map {s/^(`\Q$dbname\E`\.)?`(.*)`$/$2/; $_}
+          ($self -> connect () -> tables ());
 	} else {
-		$self -> connect () -> tables ();
+		@t = $self -> connect () -> tables ();
 	}
+    return @t;
 }
 
 =over 4
